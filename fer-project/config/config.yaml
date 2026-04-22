@@ -1,0 +1,158 @@
+# Project Configuration
+project:
+  name: "Advanced FER System"
+  version: "1.0.0"
+  random_seed: 42
+
+# Data Paths
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  splits_dir: "data/splits"
+  
+  fer2013:
+    path: "data/raw/FER2013"  # Changed to match your folder name
+    train_split: 0.8
+    val_split: 0.1
+    test_split: 0.1
+    
+  ckplus:
+    path: "data/raw/CK+48/ck+"
+    
+  jaffe:
+    path: "data/raw/jaffe/jaffe"  # jaffe has a subfolder
+
+# Emotion Classes - UPDATED to match your datasets
+emotions:
+  # FER2013 uses: angry, disgust, fear, happy, sad, surprise, neutral
+  # CK+48 uses: anger, contempt, disgust, fear, happy, sadness, surprise
+  # JAFFE uses: AN, DI, FE, HA, SA, SU, NE (mapped to standard names)
+  classes: ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"]
+  num_classes: 7
+  
+  # Mapping for different datasets
+  fer2013_mapping:
+    angry: 0
+    disgust: 1
+    fear: 2
+    happy: 3
+    sad: 4
+    surprise: 5
+    neutral: 6
+    
+  ckplus_mapping:  # CK+48 uses different names
+    anger: 0
+    disgust: 1
+    fear: 2
+    happy: 3
+    sadness: 4  # Maps to 'sad'
+    surprise: 5
+    contempt: 1  # Map contempt to disgust (closest match)
+    
+  jaffe_mapping:  # JAFFE uses 2-letter codes
+    AN: 0  # Angry
+    DI: 1  # Disgust
+    FE: 2  # Fear
+    HA: 3  # Happy
+    SA: 4  # Sad
+    SU: 5  # Surprise
+    NE: 6  # Neutral
+
+# Image Processing
+image:
+  size: [224, 224]
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std: [0.229, 0.224, 0.225]
+  grayscale: false
+
+# Data Threshing Parameters
+threshing:
+  enable: true
+  
+  # Face Detection
+  face_detection:
+    min_confidence: 0.0
+    min_face_size: 48
+    
+  # Quality Filters
+  quality:
+    min_brightness: 5
+    max_brightness: 250
+    min_contrast: 0.01
+    blur_threshold: 5 # Laplacian variance
+    
+  # Confidence Scoring
+  confidence:
+    enable_ensemble_filtering: true
+    min_prediction_confidence: 0.6
+    
+  # Class Balance
+  balance:
+    enable_undersampling: true
+    max_samples_per_class: 5000
+    enable_augmentation: true
+    target_samples_per_class: 4000
+
+# Model Configuration
+model:
+  architecture: "efficientnet-b2"
+  pretrained: true
+  dropout: 0.3
+  num_classes: 7
+  
+  # Training
+  batch_size: 8
+  epochs: 10
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  
+  # Optimization
+  optimizer: "adam"
+  scheduler: "reduce_lr_on_plateau"
+  patience: 10
+  factor: 0.5
+  
+  # Label Smoothing
+  label_smoothing: 0.1
+  
+  # Class Weights
+  use_class_weights: true
+  clip_weights: true
+  max_weight: 5.0
+
+# Augmentation
+augmentation:
+  train:
+    horizontal_flip: 0.5
+    rotation_range: 15
+    brightness_range: [0.8, 1.2]
+    zoom_range: 0.1
+    shift_range: 0.1
+    
+  test:
+    enable: false
+
+# Ensemble
+ensemble:
+  enable: true
+  num_models: 5
+  voting: "soft"  # soft or hard
+
+# Evaluation
+evaluation:
+  metrics: ["accuracy", "precision", "recall", "f1", "confusion_matrix"]
+  cross_dataset: true
+  save_predictions: true
+
+# Output
+output:
+  models_dir: "models"
+  figures_dir: "outputs/figures"
+  logs_dir: "outputs/logs"
+  reports_dir: "outputs/reports"
+  
+# Logging
+logging:
+  use_wandb: false
+  use_tensorboard: true
+  log_interval: 10

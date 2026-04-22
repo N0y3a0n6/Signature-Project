@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data & models (too large for GitHub)
+fer-project/data/
+fer-project/models/
+fer-project/outputs/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Claude
+.claude/settings.local.json
