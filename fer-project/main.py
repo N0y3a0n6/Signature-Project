@@ -18,8 +18,13 @@ def train(config_path: str = 'config/config.yaml'):
     setup_seed(config.get('project.random_seed'))
     create_directories(config)
     
-    # Setup device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Setup device — prefer MPS on Apple Silicon, then CUDA, then CPU
+    if torch.backends.mps.is_available():
+        device = torch.device('mps')
+    elif torch.cuda.is_available():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
     print(f"Using device: {device}")
     
     # Create dataloaders
@@ -57,7 +62,12 @@ def evaluate(model_path: str, config_path: str = 'config/config.yaml'):
     """Run cross-dataset evaluation."""
     # Load config
     config = Config(config_path)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.backends.mps.is_available():
+        device = torch.device('mps')
+    elif torch.cuda.is_available():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
     
     # Create dataloaders for all datasets
     print("\nLoading datasets for evaluation...")
@@ -69,17 +79,17 @@ def evaluate(model_path: str, config_path: str = 'config/config.yaml'):
     
     # CK+
     try:
-        _, val_loader, test_loader = create_dataloaders(config, dataset_name='ckplus')
-        dataset_loaders['CK+'] = test_loader
-    except:
-        print("CK+ dataset not available")
-    
+        _, _, ck_test_loader = create_dataloaders(config, dataset_name='ckplus')
+        dataset_loaders['CK+'] = ck_test_loader
+    except Exception as e:
+        print(f"CK+ dataset not available: {e}")
+
     # JAFFE
     try:
-        _, val_loader, test_loader = create_dataloaders(config, dataset_name='jaffe')
-        dataset_loaders['JAFFE'] = test_loader
-    except:
-        print("JAFFE dataset not available")
+        _, _, jaffe_test_loader = create_dataloaders(config, dataset_name='jaffe')
+        dataset_loaders['JAFFE'] = jaffe_test_loader
+    except Exception as e:
+        print(f"JAFFE dataset not available: {e}")
     
     # Evaluate
     print("\nEvaluating model...")

@@ -3,12 +3,12 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
 from torch.utils.data import DataLoader
 from pathlib import Path
 from tqdm import tqdm
 import numpy as np
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 import time
 
 from ..utils.metrics import MetricsCalculator, MetricsTracker
@@ -44,7 +44,7 @@ class FERTrainer:
         self,
         model: nn.Module,
         config,
-        device: str = 'cuda',
+        device: str = 'cpu',
         class_names: list = None
     ):
         """
@@ -105,15 +105,19 @@ class FERTrainer:
     
     def _create_scheduler(self):
         """Create learning rate scheduler from config."""
+        scheduler_name = self.config.get('model.scheduler', 'reduce_lr_on_plateau').lower()
+
+        if scheduler_name == 'cosine':
+            num_epochs = self.config.get('model.epochs', 20)
+            return CosineAnnealingLR(self.optimizer, T_max=num_epochs, eta_min=1e-6)
+
         patience = self.config.get('model.patience', 10)
         factor = self.config.get('model.factor', 0.5)
-        
         return ReduceLROnPlateau(
             self.optimizer,
             mode='max',
             patience=patience,
             factor=factor,
-            verbose=True
         )
     
     def calculate_class_weights(self, train_loader: DataLoader) -> torch.Tensor:
@@ -133,16 +137,23 @@ class FERTrainer:
             for label in labels:
                 class_counts[label] += 1
         
-        # Calculate weights (inverse frequency)
+        # Calculate weights (inverse frequency) — clamp counts to avoid division by zero
         total_samples = class_counts.sum()
+        class_counts = torch.clamp(class_counts, min=1)
         class_weights = total_samples / (len(self.class_names) * class_counts)
-        
-        # Clip weights if specified
+
         if self.config.get('model.clip_weights', False):
             max_weight = self.config.get('model.max_weight', 5.0)
             class_weights = torch.clamp(class_weights, max=max_weight)
-        
-        return class_weights.to(self.device)
+
+        class_weights = class_weights.to(self.device)
+
+        # Apply weights to the criterion so they are actually used during training
+        self.criterion = LabelSmoothingCrossEntropy(
+            smoothing=self.config.get('model.label_smoothing', 0.0)
+        ) if self.config.get('model.label_smoothing', 0.0) > 0 else nn.CrossEntropyLoss(weight=class_weights)
+
+        return class_weights
     
     def train_epoch(self, train_loader: DataLoader, epoch: int) -> Dict[str, float]:
         """
@@ -247,42 +258,52 @@ class FERTrainer:
         train_loader: DataLoader,
         val_loader: DataLoader,
         num_epochs: int,
-        save_dir: str = 'models/checkpoints'
+        save_dir: str = 'models/checkpoints',
+        freeze_epochs: Optional[int] = None,
     ):
-        """
-        Full training loop.
-        
-        Args:
-            train_loader: Training data loader
-            val_loader: Validation data loader
-            num_epochs: Number of epochs to train
-            save_dir: Directory to save checkpoints
-        """
         save_path = Path(save_dir)
         save_path.mkdir(parents=True, exist_ok=True)
-        
+
+        if freeze_epochs is None:
+            freeze_epochs = self.config.get('model.freeze_epochs', 5)
+
+        use_cosine = isinstance(self.scheduler, CosineAnnealingLR)
+
+        # Freeze backbone for the first freeze_epochs epochs
+        if freeze_epochs > 0 and hasattr(self.model, 'freeze_backbone'):
+            self.model.freeze_backbone()
+            frozen = True
+            print(f"Backbone frozen for first {freeze_epochs} epochs")
+        else:
+            frozen = False
+
         print("="*60)
         print("Starting Training")
         print("="*60)
         print(f"Device: {self.device}")
-        print(f"Epochs: {num_epochs}")
+        print(f"Epochs: {num_epochs}  |  Freeze epochs: {freeze_epochs}")
         print(f"Training samples: {len(train_loader.dataset)}")
         print(f"Validation samples: {len(val_loader.dataset)}")
         print("="*60)
-        
+
         for epoch in range(1, num_epochs + 1):
             epoch_start = time.time()
-            
-            # Train
+
+            # Unfreeze backbone after freeze_epochs
+            if frozen and epoch > freeze_epochs:
+                self.model.unfreeze_backbone()
+                frozen = False
+                print(f"\n  *** Backbone unfrozen at epoch {epoch} ***")
+
             train_metrics = self.train_epoch(train_loader, epoch)
-            
-            # Validate
             val_metrics = self.validate(val_loader, epoch)
-            
-            # Update scheduler
-            self.scheduler.step(val_metrics['accuracy'])
-            
-            # Track metrics
+
+            # Cosine steps every epoch; ReduceLROnPlateau steps on metric
+            if use_cosine:
+                self.scheduler.step()
+            else:
+                self.scheduler.step(val_metrics['accuracy'])
+
             self.metrics_tracker.update({
                 'train_loss': train_metrics['loss'],
                 'train_acc': train_metrics['accuracy'],
@@ -290,38 +311,32 @@ class FERTrainer:
                 'val_acc': val_metrics['accuracy'],
                 'learning_rate': self.optimizer.param_groups[0]['lr']
             }, epoch)
-            
-            # Print epoch summary
+
             epoch_time = time.time() - epoch_start
             print(f"\nEpoch {epoch}/{num_epochs} - {epoch_time:.1f}s")
             print(f"  Train Loss: {train_metrics['loss']:.4f} | Train Acc: {train_metrics['accuracy']:.4f}")
             print(f"  Val Loss:   {val_metrics['loss']:.4f} | Val Acc:   {val_metrics['accuracy']:.4f}")
             print(f"  LR: {self.optimizer.param_groups[0]['lr']:.6f}")
-            
-            # Save best model
+
             if val_metrics['accuracy'] > self.best_val_acc:
                 self.best_val_acc = val_metrics['accuracy']
                 self.best_epoch = epoch
-                
-                checkpoint_path = save_path / 'best_model.pth'
-                self.save_checkpoint(checkpoint_path, epoch, val_metrics)
+                self.save_checkpoint(save_path / 'best_model.pth', epoch, val_metrics)
                 print(f"  ✓ New best model saved! (Val Acc: {self.best_val_acc:.4f})")
-            
-            # Save periodic checkpoint
+
             if epoch % 10 == 0:
-                checkpoint_path = save_path / f'checkpoint_epoch_{epoch}.pth'
-                self.save_checkpoint(checkpoint_path, epoch, val_metrics)
-            
+                self.save_checkpoint(save_path / f'checkpoint_epoch_{epoch}.pth', epoch, val_metrics)
+
             print("-"*60)
-        
+
         print("\n" + "="*60)
         print("Training Complete!")
         print(f"Best validation accuracy: {self.best_val_acc:.4f} (Epoch {self.best_epoch})")
         print("="*60)
-        
+
         return self.metrics_tracker
     
-    def save_checkpoint(self, path: str, epoch: int, metrics: Dict):
+    def save_checkpoint(self, path: Union[str, Path], epoch: int, metrics: Dict):
         """Save model checkpoint."""
         torch.save({
             'epoch': epoch,
@@ -333,7 +348,7 @@ class FERTrainer:
     
     def load_checkpoint(self, path: str):
         """Load model checkpoint."""
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         return checkpoint['epoch'], checkpoint['metrics']

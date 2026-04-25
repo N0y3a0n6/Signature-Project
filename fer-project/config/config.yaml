@@ -101,14 +101,15 @@ model:
   num_classes: 7
   
   # Training
-  batch_size: 8
-  epochs: 10
+  batch_size: 16
+  epochs: 20
   learning_rate: 0.001
   weight_decay: 0.0001
-  
+  freeze_epochs: 5
+
   # Optimization
   optimizer: "adam"
-  scheduler: "reduce_lr_on_plateau"
+  scheduler: "cosine"
   patience: 10
   factor: 0.5
   
