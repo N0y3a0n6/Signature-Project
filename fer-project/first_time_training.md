@@ -12,10 +12,10 @@ Install all required packages before starting:
 ```bash
 pip install typing_extensions --upgrade
 pip install torch torchvision
-pip install opencv-python==4.8.0.76
+pip install opencv-python
 pip install scikit-learn scikit-image pillow
 pip install efficientnet-pytorch
-pip install facenet-pytorch
+pip install gradio matplotlib tqdm pyyaml
 ```
 
 ### Datasets Required
@@ -320,15 +320,15 @@ fer_test = FER2013Dataset(cleaned_path, split='test', transform=test_transform)
 Configure batch loading:
 
 ```python
-train_loader = DataLoader(fer_train, batch_size=32, shuffle=True, num_workers=4)
-val_loader = DataLoader(fer_val, batch_size=32, shuffle=False, num_workers=4)
-test_loader = DataLoader(fer_test, batch_size=32, shuffle=False, num_workers=4)
+train_loader = DataLoader(fer_train, batch_size=16, shuffle=True, num_workers=0)
+val_loader = DataLoader(fer_val, batch_size=16, shuffle=False, num_workers=0)
+test_loader = DataLoader(fer_test, batch_size=16, shuffle=False, num_workers=0)
 ```
 
 **Parameters:**
-- `batch_size=32`: Adjust based on available GPU memory
+- `batch_size=16`: Safe for Apple M1 8 GB unified memory (use 32 on dedicated GPU)
 - `shuffle=True`: Randomize training batches
-- `num_workers=4`: Parallel data loading (use 0 for CPU)
+- `num_workers=0`: Required on MPS (multiprocessing conflicts); use 4 on CUDA
 
 ### Step 3.4: CPU Optimization (Optional)
 If training on CPU, reduce dataset size for faster iteration:
@@ -380,8 +380,9 @@ trainer = FERTrainer(
 **Key hyperparameters** (from config):
 - Learning rate: 0.001
 - Optimizer: Adam
-- Loss function: CrossEntropyLoss (with optional class weights)
-- Scheduler: ReduceLROnPlateau
+- Loss function: LabelSmoothingCrossEntropy (smoothing=0.1) + class weights
+- Scheduler: CosineAnnealingLR (T_max=20 epochs)
+- Backbone frozen for first 5 epochs, then unfrozen
 
 **Class weights** (optional):
 If data is imbalanced, compute inverse frequency weights:
@@ -1022,7 +1023,42 @@ Model Efficiency Metrics:
 
 ---
 
-**Good luck with your training!** 🚀
+---
+
+## Phase 4: Webcam Demo
+
+**Script**: `app.py`
+**Duration**: ~30 seconds to launch
+**Purpose**: Test the trained model live via browser webcam
+
+### Step 4.1: Launch the Gradio app
+```bash
+cd fer-project
+python3 app.py
+```
+Open **http://127.0.0.1:7860** in your browser.
+
+### Step 4.2: Use the demo
+1. Select the **Webcam** tab in the input panel
+2. Allow camera access when the browser prompts
+3. Click the shutter button to capture a frame
+4. Analysis triggers automatically — results appear on the right
+
+**Outputs displayed:**
+- Annotated image with face bounding box and emotion label
+- Horizontal bar chart of all 7 emotion probabilities
+- Top emotion name + confidence percentage
+
+### Notes
+- Falls back to centre crop if no face is detected by Haar cascade
+- Model runs on MPS (Apple Silicon) automatically
+- To stop: `Ctrl+C` in the terminal
+
+**✓ Phase 4 Complete**: Your trained model is running live from the webcam!
+
+---
+
+**Good luck with your training!**
 
 *Last updated: April 2026*
-*Based on: EfficientNet-B2, FER2013 dataset, 50 epochs training*
+*Based on: EfficientNet-B2, FER2013 + CK+48 datasets, 20 epochs, Apple M1 8 GB*
