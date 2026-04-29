@@ -2,6 +2,8 @@
 
 EfficientNet-B2 trained on FER2013 + CK+48 + JAFFE for 7-class facial emotion recognition, with a Gradio webcam demo.
 
+![Architecture](docs/architecture.png)
+
 ## Emotions
 `angry` · `disgust` · `fear` · `happy` · `sad` · `surprise` · `neutral`
 
