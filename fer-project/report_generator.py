@@ -7,10 +7,183 @@ from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 import os
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from pygments import highlight
+from pygments.lexers import PythonLexer, YamlLexer
+from pygments.formatters import ImageFormatter
+from pygments.styles import get_style_by_name
 
-FIGURES = "outputs/figures"
-OUT     = "docs/FER_Final_Report.docx"
-os.makedirs("docs", exist_ok=True)
+FIGURES  = "outputs/figures"
+SNIPPETS = "outputs/snippets"
+OUT      = "docs/FER_Final_Report.docx"
+os.makedirs("docs",     exist_ok=True)
+os.makedirs(SNIPPETS,   exist_ok=True)
+
+# ── Code-snippet image generator ─────────────────────────────────────────────
+
+def code_image(code: str, filename: str, language: str = "python") -> str:
+    """Render a syntax-highlighted code snippet and save as PNG. Returns path."""
+    lexer     = YamlLexer() if language == "yaml" else PythonLexer()
+    formatter = ImageFormatter(
+        style        = 'monokai',
+        font_size    = 13,
+        line_numbers = False,
+        image_pad    = 14,
+        line_pad     = 3,
+    )
+    out_path = f"{SNIPPETS}/{filename}.png"
+    with open(out_path, "wb") as f:
+        f.write(highlight(code, lexer, formatter))
+    return out_path
+
+# ── Code snippets ─────────────────────────────────────────────────────────────
+
+SNIPPET_LABEL_MAP = """\
+# config/config.yaml
+ckplus_mapping:
+  anger:    0       # → "angry"
+  sadness:  4       # → "sad"   (different name)
+  contempt: 1       # → "disgust" (no direct class — closest match)
+
+jaffe_mapping:
+  AN: 0   # Angry
+  DI: 1   # Disgust
+  FE: 2   # Fear
+  HA: 3   # Happy
+  SA: 4   # Sad
+  SU: 5   # Surprise
+  NE: 6   # Neutral
+"""
+
+SNIPPET_SAMPLER = """\
+# notebooks/03_model_training.ipynb
+subset_labels  = np.array([fer_train[i][1] for i in train_indices])
+class_counts   = np.bincount(subset_labels, minlength=len(emotions))
+
+# Weight = 1 / class frequency  →  rare classes sampled more often
+sample_weights = 1.0 / class_counts[subset_labels]
+
+sampler = WeightedRandomSampler(
+    weights     = torch.DoubleTensor(sample_weights),
+    num_samples = len(subset_labels),
+    replacement = True,   # allows rare classes to repeat within epoch
+)
+train_loader = DataLoader(
+    fer_train_subset, batch_size=16,
+    sampler=sampler, num_workers=0,
+)
+"""
+
+SNIPPET_FREEZE = """\
+# src/models/trainer.py  —  FERTrainer.train()
+if freeze_epochs > 0 and hasattr(self.model, 'freeze_backbone'):
+    self.model.freeze_backbone()    # lock backbone weights
+    frozen = True
+    print(f"Backbone frozen for first {freeze_epochs} epochs")
+
+for epoch in range(1, num_epochs + 1):
+    # Unlock full network after warm-up phase
+    if frozen and epoch > freeze_epochs:
+        self.model.unfreeze_backbone()
+        frozen = False
+        print(f"*** Backbone unfrozen at epoch {epoch} ***")
+    ...
+
+# src/models/efficientnet_model.py
+def freeze_backbone(self):
+    for param in self.base_model.parameters():
+        param.requires_grad = False
+    for param in self.base_model._fc.parameters():
+        param.requires_grad = True    # keep classifier trainable
+
+def unfreeze_backbone(self):
+    for param in self.base_model.parameters():
+        param.requires_grad = True
+"""
+
+SNIPPET_WEIGHTS = """\
+# src/models/trainer.py  —  calculate_class_weights()
+class_counts  = torch.clamp(class_counts, min=1)   # avoid ÷ 0
+class_weights = total_samples / (len(self.class_names) * class_counts)
+
+# Clip to max 5× to prevent instability from extreme ratios
+if self.config.get('model.clip_weights', False):
+    max_weight    = self.config.get('model.max_weight', 5.0)
+    class_weights = torch.clamp(class_weights, max=max_weight)
+
+class_weights = class_weights.to(self.device)
+
+# ← Key step: wire weights directly into the loss criterion
+self.criterion = nn.CrossEntropyLoss(weight=class_weights)
+"""
+
+SNIPPET_SMOOTHING = """\
+# src/models/trainer.py  —  LabelSmoothingCrossEntropy
+class LabelSmoothingCrossEntropy(nn.Module):
+    def __init__(self, smoothing: float = 0.1):
+        super().__init__()
+        self.smoothing = smoothing
+
+    def forward(self, pred, target):
+        n_class = pred.size(1)
+        one_hot = torch.zeros_like(pred).scatter(
+                      1, target.unsqueeze(1), 1)
+
+        # Hard  [0, 0, 1, 0, 0, 0, 0]
+        # Soft  [.014, .014, .914, .014, .014, .014, .014]
+        one_hot = one_hot * (1 - self.smoothing) \\
+                + self.smoothing / n_class
+
+        log_prob = F.log_softmax(pred, dim=1)
+        return -(one_hot * log_prob).sum(dim=1).mean()
+"""
+
+SNIPPET_MPS = """\
+# main.py  — automatic 3-tier device selection
+if torch.backends.mps.is_available():
+    device = torch.device('mps')    # Apple Silicon GPU
+elif torch.cuda.is_available():
+    device = torch.device('cuda')   # NVIDIA GPU
+else:
+    device = torch.device('cpu')    # fallback
+
+print(f"Using device: {device}")
+# Output on Apple M1:  "Using device: mps"
+"""
+
+SNIPPET_FALLBACK = """\
+# app.py  — graceful fallback when no face detected
+faces = face_detector.detectMultiScale(
+    gray, scaleFactor=1.1, minNeighbors=4, minSize=(40, 40))
+
+if len(faces) == 0:
+    # Use largest centred square crop instead of crashing
+    h, w   = img_bgr.shape[:2]
+    size   = min(h, w)
+    y0, x0 = (h - size) // 2, (w - size) // 2
+    face_crop     = img_bgr[y0:y0+size, x0:x0+size]
+    status_prefix = "No face detected — using centre crop. "
+else:
+    # Largest detected face + 10% padding
+    areas    = [w * h for (_, _, w, h) in faces]
+    x, y, w, h = faces[int(np.argmax(areas))]
+    pad      = int(0.1 * max(w, h))
+    face_crop = img_bgr[y-pad:y+h+pad, x-pad:x+w+pad]
+"""
+
+# Pre-render all snippets at import time
+_SNIPS = {
+    "label_map":  code_image(SNIPPET_LABEL_MAP,  "01_label_map",  language="yaml"),
+    "sampler":    code_image(SNIPPET_SAMPLER,     "02_sampler"),
+    "freeze":     code_image(SNIPPET_FREEZE,      "03_freeze"),
+    "weights":    code_image(SNIPPET_WEIGHTS,     "04_weights"),
+    "smoothing":  code_image(SNIPPET_SMOOTHING,   "05_smoothing"),
+    "mps":        code_image(SNIPPET_MPS,         "06_mps"),
+    "fallback":   code_image(SNIPPET_FALLBACK,    "07_fallback"),
+}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -515,6 +688,8 @@ para(doc,
      "as the closest semantic match. This allows one trained model to be evaluated "
      "across all three datasets without any post-hoc label alignment, enabling true "
      "cross-dataset generalisation measurement.")
+insert_image(doc, _SNIPS["label_map"], width=5.0,
+             caption="Code Snippet 1. Unified label mapping for CK+48 and JAFFE in config.yaml.")
 
 heading(doc, "6.2  WeightedRandomSampler for Rare Emotion Classes", level=2)
 para(doc,
@@ -528,6 +703,8 @@ para(doc,
      "their raw frequency, without discarding any majority-class samples. This single "
      "change was the primary driver of disgust and fear F1 improving from 0.00 to "
      "approximately 0.45.")
+insert_image(doc, _SNIPS["sampler"], width=5.2,
+             caption="Code Snippet 2. WeightedRandomSampler assigning inverse-frequency weights per sample.")
 
 heading(doc, "6.3  Freeze–Unfreeze Backbone Training Schedule", level=2)
 para(doc,
@@ -540,6 +717,8 @@ para(doc,
      "phase ensures the classifier head produces sensible gradients before they "
      "propagate into the backbone, preserving low-level feature quality during the "
      "critical early training period and consistently improving final accuracy.")
+insert_image(doc, _SNIPS["freeze"], width=5.2,
+             caption="Code Snippet 3. Two-phase freeze–unfreeze training schedule in FERTrainer and EfficientNetFER.")
 
 heading(doc, "6.4  Class Weights Wired Directly into the Loss Function", level=2)
 para(doc,
@@ -552,6 +731,8 @@ para(doc,
      "frequency ratios. This ensures that misclassifying a rare class (disgust, fear) "
      "is penalised up to five times more heavily than a common class (happy), directly "
      "guiding the optimiser toward balanced per-class performance.")
+insert_image(doc, _SNIPS["weights"], width=5.2,
+             caption="Code Snippet 4. Inverse-frequency class weights clipped and applied directly to the loss criterion.")
 
 heading(doc, "6.5  Custom Label Smoothing Cross-Entropy Loss", level=2)
 para(doc,
@@ -564,6 +745,8 @@ para(doc,
      "into a soft distribution. This regularises predictions on ambiguous class "
      "boundaries, reduces overfitting to noisy FER2013 labels, and directly addresses "
      "the Bayes Error (human subjectivity) challenge from the proposal.")
+insert_image(doc, _SNIPS["smoothing"], width=5.2,
+             caption="Code Snippet 5. Custom LabelSmoothingCrossEntropy converting hard targets into soft distributions.")
 
 heading(doc, "6.6  Apple Silicon MPS Acceleration with Automatic Device Selection", level=2)
 para(doc,
@@ -575,6 +758,8 @@ para(doc,
      "model trains and performs real-time inference on a standard consumer MacBook "
      "without any dedicated NVIDIA GPU, achieving approximately 6–8 minutes per "
      "epoch on Apple M1 8 GB unified memory.")
+insert_image(doc, _SNIPS["mps"], width=4.5,
+             caption="Code Snippet 6. Automatic MPS → CUDA → CPU device selection chain.")
 
 heading(doc, "6.7  Robust Centre-Crop Fallback in the Live Demo", level=2)
 para(doc,
@@ -586,6 +771,8 @@ para(doc,
      "application responsive under all conditions and provides the user with a "
      "result and an explanatory status message, rather than a silent failure — "
      "directly supporting the real-world robustness goal of the proposal.")
+insert_image(doc, _SNIPS["fallback"], width=5.2,
+             caption="Code Snippet 7. Centre-crop fallback when Haar cascade detects no face in the webcam frame.")
 
 tbl_n = doc.add_table(rows=1, cols=3)
 tbl_n.alignment = WD_TABLE_ALIGNMENT.CENTER
