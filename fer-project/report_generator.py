@@ -495,10 +495,120 @@ para(doc,
      "No test-time augmentation (TTA) was applied during evaluation, preserving a fair "
      "single-pass comparison baseline.")
 
-# ── 6. Results and Evaluation ─────────────────────────────────────────────────
-heading(doc, "6.  Results and Evaluation")
+# ── 6. Novel Contributions ────────────────────────────────────────────────────
+heading(doc, "6.  Novel Contributions")
+para(doc,
+     "Beyond applying established deep-learning techniques, this project introduced "
+     "seven specific design decisions and engineering novelties that distinguish it "
+     "from a standard FER baseline. Each novelty directly addresses one or more of "
+     "the five challenges identified in the project proposal.")
 
-heading(doc, "6.1  Training Progression", level=2)
+heading(doc, "6.1  Unified Multi-Dataset Label Mapping", level=2)
+para(doc,
+     "The three datasets each define emotion classes with different naming conventions. "
+     "FER2013 uses lowercase English names, CK+48 uses different English names "
+     "(anger, sadness), and JAFFE uses two-letter Japanese phonetic codes "
+     "(AN, DI, FE, HA, SA, SU, NE). Rather than training separate models per dataset, "
+     "a unified mapping dictionary was defined in the project configuration to translate "
+     "all three schemas onto a single 7-class label space at load time. Notably, "
+     "CK+48's contempt class — which has no direct counterpart — was mapped to disgust "
+     "as the closest semantic match. This allows one trained model to be evaluated "
+     "across all three datasets without any post-hoc label alignment, enabling true "
+     "cross-dataset generalisation measurement.")
+
+heading(doc, "6.2  WeightedRandomSampler for Rare Emotion Classes", level=2)
+para(doc,
+     "Standard shuffle-based DataLoaders draw samples uniformly, meaning rare classes "
+     "such as disgust (1.5% of FER2013) appear in only a fraction of training batches. "
+     "The consequence is that the model learns to ignore those classes entirely — "
+     "disgust and fear both achieved F1 = 0.00 in the unoptimised baseline. A "
+     "WeightedRandomSampler was introduced, assigning each sample a weight inversely "
+     "proportional to its class frequency. This guarantees that every training batch "
+     "contains approximately equal representation of all seven classes regardless of "
+     "their raw frequency, without discarding any majority-class samples. This single "
+     "change was the primary driver of disgust and fear F1 improving from 0.00 to "
+     "approximately 0.45.")
+
+heading(doc, "6.3  Freeze–Unfreeze Backbone Training Schedule", level=2)
+para(doc,
+     "Fine-tuning a pretrained network by immediately training all layers with a "
+     "randomly initialised classifier head risks corrupting the learned ImageNet "
+     "representations in the first few gradient steps. A two-phase training schedule "
+     "was implemented: the EfficientNet-B2 backbone was frozen for the first five "
+     "epochs, allowing only the custom classifier head to update. From epoch six "
+     "onward, the entire network was unfrozen and trained end-to-end. This warm-up "
+     "phase ensures the classifier head produces sensible gradients before they "
+     "propagate into the backbone, preserving low-level feature quality during the "
+     "critical early training period and consistently improving final accuracy.")
+
+heading(doc, "6.4  Class Weights Wired Directly into the Loss Function", level=2)
+para(doc,
+     "A common implementation oversight in class-imbalanced training is to compute "
+     "inverse-frequency class weights but fail to actually apply them to the loss. "
+     "In this project the calculate_class_weights method in FERTrainer explicitly "
+     "updates self.criterion in-place after computing weights, replacing the default "
+     "unweighted loss with a weighted CrossEntropyLoss. Weights are additionally "
+     "clipped to a maximum of 5× to prevent training instability from extreme "
+     "frequency ratios. This ensures that misclassifying a rare class (disgust, fear) "
+     "is penalised up to five times more heavily than a common class (happy), directly "
+     "guiding the optimiser toward balanced per-class performance.")
+
+heading(doc, "6.5  Custom Label Smoothing Cross-Entropy Loss", level=2)
+para(doc,
+     "Standard CrossEntropyLoss trains the model to assign 100% probability to the "
+     "annotated label, treating emotion annotations as absolute ground truth. However, "
+     "emotion labelling is inherently subjective — the same facial expression can be "
+     "perceived as fear by one annotator and surprise by another. A custom "
+     "LabelSmoothingCrossEntropy module distributes a small probability mass "
+     "(ε = 0.1) uniformly across all seven classes, converting a hard one-hot target "
+     "into a soft distribution. This regularises predictions on ambiguous class "
+     "boundaries, reduces overfitting to noisy FER2013 labels, and directly addresses "
+     "the Bayes Error (human subjectivity) challenge from the proposal.")
+
+heading(doc, "6.6  Apple Silicon MPS Acceleration with Automatic Device Selection", level=2)
+para(doc,
+     "Most published FER implementations assume CUDA GPU availability. This project "
+     "implemented an automatic three-tier device selection chain: Metal Performance "
+     "Shaders (MPS) on Apple Silicon is prioritised first, CUDA second, CPU as "
+     "fallback. No code changes are required when moving between hardware "
+     "environments. This confirms the Green AI and mobile-viability objective: the "
+     "model trains and performs real-time inference on a standard consumer MacBook "
+     "without any dedicated NVIDIA GPU, achieving approximately 6–8 minutes per "
+     "epoch on Apple M1 8 GB unified memory.")
+
+heading(doc, "6.7  Robust Centre-Crop Fallback in the Live Demo", level=2)
+para(doc,
+     "Real-world webcam frames frequently contain no detectable face due to poor "
+     "lighting, extreme angles, or partial occlusion. A naive implementation would "
+     "crash or return empty results. The Gradio demo implements a graceful fallback: "
+     "when the Haar cascade face detector finds no face, the largest centred square "
+     "crop of the frame is used as the model input instead. This keeps the "
+     "application responsive under all conditions and provides the user with a "
+     "result and an explanatory status message, rather than a silent failure — "
+     "directly supporting the real-world robustness goal of the proposal.")
+
+tbl_n = doc.add_table(rows=1, cols=3)
+tbl_n.alignment = WD_TABLE_ALIGNMENT.CENTER
+tbl_n.style = 'Table Grid'
+add_table_row(tbl_n, ["Section", "Novelty", "Proposal Challenge Addressed"], header=True)
+novelties = [
+    ("6.1", "Unified multi-dataset label mapping",        "Real-world gap / cross-dataset evaluation"),
+    ("6.2", "WeightedRandomSampler",                      "Severe class imbalance"),
+    ("6.3", "Freeze–unfreeze backbone schedule",          "Transfer learning stability"),
+    ("6.4", "Class weights wired into loss function",     "Severe class imbalance"),
+    ("6.5", "Custom Label Smoothing Cross-Entropy",       "Human subjectivity / Bayes error"),
+    ("6.6", "Apple MPS auto-detection",                   "Hardware & computational constraints"),
+    ("6.7", "Centre-crop fallback in demo",               "Real-world robustness"),
+]
+for row in novelties:
+    add_table_row(tbl_n, row)
+para(doc, "Table 6. Summary of novel contributions and the proposal challenges they address.",
+     size=9, italic=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_before=2, space_after=10)
+
+# ── 7. Results and Evaluation ─────────────────────────────────────────────────
+heading(doc, "7.  Results and Evaluation")
+
+heading(doc, "7.1  Training Progression", level=2)
 para(doc,
      "Figure 5 shows the training and validation loss and accuracy curves over 20 epochs. "
      "The backbone unfreeze at epoch 6 is visible as a brief dip in validation loss "
@@ -510,7 +620,7 @@ insert_image(doc, f"{FIGURES}/training_history.png", width=5.8,
              caption="Figure 5. Training and validation loss/accuracy over 20 epochs. "
                      "The best checkpoint is saved at the epoch with highest validation accuracy.")
 
-heading(doc, "6.2  Cross-Dataset Evaluation", level=2)
+heading(doc, "7.2  Cross-Dataset Evaluation", level=2)
 para(doc,
      "The best checkpoint was evaluated on the held-out test split of all three datasets. "
      "Results are summarised in Table 3 and Figure 6.")
@@ -542,7 +652,7 @@ para(doc,
 insert_image(doc, f"{FIGURES}/cross_dataset_accuracy.png", width=5.5,
              caption="Figure 6. Cross-dataset accuracy comparison across FER2013, CK+48, and JAFFE.")
 
-heading(doc, "6.3  Per-Class Performance", level=2)
+heading(doc, "7.3  Per-Class Performance", level=2)
 para(doc,
      "Table 4 presents per-class F1 scores on the FER2013 test set, alongside a "
      "qualitative assessment. Figure 7 shows the confusion matrix.")
@@ -578,7 +688,7 @@ para(doc,
      "visually distinctive smile signature.")
 
 # ── 7. Real-World Deployment: Gradio Demo ─────────────────────────────────────
-heading(doc, "7.  Real-World Deployment: Gradio Web Application")
+heading(doc, "8.  Real-World Deployment: Gradio Web Application")
 para(doc,
      "A core objective from the project proposal was to 'bridge the gap to mobile' by "
      "demonstrating the model in a natural, real-world setting. A Gradio web application "
@@ -602,9 +712,9 @@ para(doc,
      "on a standard Apple M1 laptop with no dedicated GPU.")
 
 # ── 8. Discussion ─────────────────────────────────────────────────────────────
-heading(doc, "8.  Discussion")
+heading(doc, "9.  Discussion")
 
-heading(doc, "8.1  Addressing the Five Proposed Goals", level=2)
+heading(doc, "9.1  Addressing the Five Proposed Goals", level=2)
 para(doc, "The following table evaluates progress against each goal from the project proposal:")
 
 tbl5 = doc.add_table(rows=1, cols=3)
@@ -633,7 +743,7 @@ for row in goals:
 para(doc, "Table 5. Project goals vs. outcomes.",
      size=9, italic=True, align=WD_ALIGN_PARAGRAPH.CENTER, space_before=2, space_after=8)
 
-heading(doc, "8.2  Limitations", level=2)
+heading(doc, "9.2  Limitations", level=2)
 bullet(doc,
        " Only ~33% of FER2013 training data was used to fit within the 8 GB M1 memory "
        "budget. Training on the full dataset on a CUDA GPU would likely close the gap "
@@ -654,7 +764,7 @@ bullet(doc,
        bold_prefix="Face Detector Limitation: ")
 
 # ── 9. Conclusion ─────────────────────────────────────────────────────────────
-heading(doc, "9.  Conclusion and Future Work")
+heading(doc, "10.  Conclusion and Future Work")
 para(doc,
      "This project successfully delivered an Advanced Facial Emotion Recognition system "
      "that addresses all five challenges identified in the project proposal. The "
